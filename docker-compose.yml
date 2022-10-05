@@ -1,0 +1,119 @@
+version: "3.7"
+
+services:
+  redirector:
+    build: redirector
+    image: deployment.cz/ppc-redirector:latest
+    command: redirector --host 0.0.0.0 -p 5000
+
+    deploy:
+      replicas: 1
+
+      update_config:
+        order: start-first
+        failure_action: rollback
+        delay: 30s
+        parallelism: 1
+
+      rollback_config:
+        parallelism: 0
+        order: stop-first
+
+      restart_policy:
+        condition: any
+        delay: 10s
+        max_attempts: 10
+        window: 15s
+      placement:
+        constraints:
+          - node.role == manager
+
+      labels:
+        - traefik.enable=true
+        - traefik.http.services.{ROUTER_PREFIX:-}-ppc-redirector.loadbalancer.server.port=5000
+
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-redirector.rule=Host(`${HOST-ppc.example.com}`)
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-redirector.entrypoints=web
+
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-redirector-https.rule=Host(`${HOST-ppc.example.com}`)
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-redirector-https.entrypoints=websecure
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-redirector-https.tls=true
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-redirector-https.tls.certresolver=cloudflare
+
+    networks:
+      - backend
+      - proxy
+
+  admin:
+    build: admin
+    image: deployment.cz/ppc-admin:latest
+
+    deploy:
+      replicas: 1
+
+      update_config:
+        order: start-first
+        failure_action: rollback
+        delay: 30s
+        parallelism: 1
+
+      rollback_config:
+        parallelism: 0
+        order: stop-first
+
+      restart_policy:
+        condition: any
+        delay: 10s
+        max_attempts: 10
+        window: 15s
+
+      labels:
+        - traefik.enable=true
+        - traefik.http.services.${ROUTER_PREFIX:-}-ppc-admin.loadbalancer.server.port=3000
+
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-admin.rule=Host(`${ADMIN_HOST-ppc-admin.example.com}`)
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-admin.entrypoints=web
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-admin.middlewares=redirect-to-https
+
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-admin-https.rule=Host(`${ADMIN_HOST-ppc-admin.example.com}`)
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-admin-https.entrypoints=websecure
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-admin-https.tls=true
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-admin-https.tls.certresolver=cloudflare
+
+        - "traefik.http.middlewares.${ROUTER_PREFIX:-}-ppc-admin-auth.basicauth.users=${ADMIN_AUTH-admin:$apr1$8jhGnjLB$BYsuubp0QleIT3CANj05a0}"
+        - traefik.http.routers.${ROUTER_PREFIX:-}-ppc-admin-https.middlewares=${ROUTER_PREFIX:-}-ppc-admin-auth
+
+    networks:
+      - backend
+      - proxy
+
+  db:
+    image: surrealdb/surrealdb
+    command: start --log trace --user root --pass root file:/data/db
+
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 2G
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 10
+        window: 15s
+
+    volumes:
+      - surrealdb_data:/data/db
+
+    networks:
+      - backend
+
+volumes:
+  surrealdb_data:
+
+networks:
+  backend:
+    driver: overlay
+    attachable: true
+  proxy:
+    external: true
